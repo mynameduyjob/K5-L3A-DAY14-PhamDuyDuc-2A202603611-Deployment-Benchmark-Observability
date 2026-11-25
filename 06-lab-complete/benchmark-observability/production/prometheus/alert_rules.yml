@@ -1,59 +1,44 @@
-# ============================================================
-# Alert rules — đánh giá liên tục, xem trạng thái ở http://localhost:9090/alerts
-#
-# Mỗi alert có 3 trạng thái: inactive → pending (đúng điều kiện nhưng chưa đủ "for")
-#                            → firing (kéo dài đủ lâu → gửi cảnh báo)
-# "for" giúp tránh báo động giả khi chỉ có 1 spike ngắn.
-# ============================================================
 groups:
-  - name: agent-slo
+  - name: ai_agent_alerts
     rules:
-      # ── Errors ────────────────────────────────────────────
       - alert: AgentHighErrorRate
-        expr: |
-          sum(rate(http_requests_total{job="agent", route="/ask", status=~"5.."}[1m]))
-            /
-          sum(rate(http_requests_total{job="agent", route="/ask"}[1m]))
-            > 0.05
+        expr: >
+          (sum(rate(http_requests_total{job="agent",route="/ask",status=~"5.."}[1m])) or vector(0))
+          / clamp_min(sum(rate(http_requests_total{job="agent",route="/ask"}[1m])), 1e-9)
+          > 0.05
         for: 1m
         labels:
           severity: critical
         annotations:
-          summary: "Error rate /ask vượt 5%"
-          description: "Error rate hiện tại: {{ $value | humanizePercentage }} (SLO: < 5%)"
+          summary: "Agent /ask 5xx error rate > 5%"
+          description: "Error rate is {{ $value | humanizePercentage }} over the last 1m."
 
-      # ── Latency ───────────────────────────────────────────
       - alert: AgentHighLatencyP95
-        expr: |
+        expr: >
           histogram_quantile(0.95,
-            sum by (le) (rate(http_request_duration_seconds_bucket{job="agent", route="/ask"}[1m]))
-          ) > 1
+            sum by (le) (rate(http_request_duration_seconds_bucket{job="agent",route="/ask"}[1m]))
+          ) > 0.5
         for: 2m
         labels:
           severity: warning
         annotations:
-          summary: "p95 latency /ask vượt 1 giây"
-          description: "p95 hiện tại: {{ $value | humanizeDuration }} (SLO: < 1s)"
+          summary: "Agent /ask p95 latency > 500ms"
+          description: "p95 latency is {{ $value | humanizeDuration }} over the last 1m."
 
-      # ── Availability ──────────────────────────────────────
       - alert: AgentInstanceDown
         expr: up{job="agent"} == 0
         for: 30s
         labels:
           severity: critical
         annotations:
-          summary: "Instance agent {{ $labels.instance }} không scrape được"
-          description: "Prometheus không gọi được /metrics của {{ $labels.instance }} trong 30s"
+          summary: "Agent instance {{ $labels.instance }} is down"
+          description: "Prometheus cannot scrape {{ $labels.instance }} for 30s."
 
-  - name: agent-cost
-    rules:
-      # ── Cost ──────────────────────────────────────────────
-      # Ước tính tốc độ "đốt tiền" theo giờ dựa trên 5 phút gần nhất
       - alert: LLMCostBurnRateHigh
-        expr: sum(rate(llm_cost_usd_total{job="agent"}[5m])) * 3600 > 2
-        for: 2m
+        expr: sum(rate(llm_cost_usd_total{job="agent"}[1m])) * 3600 > 15
+        for: 1m
         labels:
           severity: warning
         annotations:
-          summary: "Chi phí LLM đang vượt $2/giờ"
-          description: "Tốc độ chi tiêu hiện tại: ${{ $value | printf \"%.2f\" }}/giờ"
+          summary: "LLM cost burn rate > $15/hour"
+          description: "Estimated LLM burn rate is ${{ $value | printf \"%.2f\" }}/hour."
